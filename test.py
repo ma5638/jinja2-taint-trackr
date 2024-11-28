@@ -1,6 +1,10 @@
 from test_util import test
 
 test("""
+{{ lower(j) | dangerous_filter }}
+""", set(["j"]))
+
+test("""
 select * from x where
 {% for x in b %}
 {% for j in x %}
@@ -12,18 +16,18 @@ a = {{ j | dangerous_filter }} {{ comma if not loop.last }}
 """, set(["b"]))
 # set(["b"]) is the expected output of the taint tracker
 
+
 test("""
 select * from x where
 {% for x in b %}
-{% set a = x %}
 {% for j in x %}
-a = {{ j | aaa }} {{ comma if not loop.last }}
-{{ j | aaa | aaa }}
+a = {{ j | dangerous_filter }} {{ comma if not loop.last }}
+{{ lower(j) | dangerous_filter }}
 {% endfor %}
 {% endfor %}
 {{ e }}
 """, set(["b"]))
-
+# set(["b"]) is the expected output of the taint tracker
 
 
 test("""

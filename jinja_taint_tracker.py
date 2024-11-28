@@ -1,4 +1,4 @@
-from jinja2 import Environment, meta, nodes
+from jinja2 import Environment, nodes
 import copy
 
 TARGET_FILTER = "dangerous_filter"
@@ -6,6 +6,8 @@ TARGET_FILTER = "dangerous_filter"
 # setting dummy environment. Should replace with jsql.jenv environment
 def dummy_filter(value):
     return value
+
+
 env = Environment()
 env.filters[TARGET_FILTER] = dummy_filter
 
@@ -14,14 +16,10 @@ env.filters[TARGET_FILTER] = dummy_filter
 class Taint_Tracker_Jinja:
     root: nodes.Node
     external_vars : set # all variables that have to be provided from the code/external (not defined inside the jinja2 snippet)
-    flowing_vars : dict  # self.flowing_vars store mapping between variable -> taint source variable
     tainted_vars : set   # this is the set of vars that the scanner should know are tainted from the jinja2 expression
 
     def __init__(self, template):
         self.root = env.parse(template)
-        self.external_vars = meta.find_undeclared_variables(self.root)
-        print("External vars:", self.external_vars)
-        # self.flowing_vars = {}
         self.tainted_vars = set()
 
 
@@ -32,7 +30,7 @@ class Taint_Tracker_Jinja:
 
 
     def _track_taint(self, node, flowing_vars_ref):
-        flowing_vars = copy.deepcopy(flowing_vars_ref)
+        flowing_vars = copy.deepcopy(flowing_vars_ref) # store mapping between variable -> taint source variable
         for field, value in node.iter_fields():
             if isinstance(value, list): # list of values -> need to loop through
                 for item in value:
@@ -53,22 +51,26 @@ class Taint_Tracker_Jinja:
                         self._track_taint(item, flowing_vars)
                         # Now that we are out of the for-loop context, the looping_vars are no longer defined
                         for lv in looping_vars:
-                            del self.flowing_vars[lv]
+                            del flowing_vars[lv]
                     elif isinstance(item, nodes.Filter) and item.name == TARGET_FILTER:
                         variable_names = self.extract_names(item.node)
                         for var in variable_names:
                             source_var = var
-                            if var in self.flowing_vars:
-                                source_var = self.flowing_vars[var]
-                            elif var in self.external_vars:
-                                pass
+                            if var in flowing_vars:
+                                source_var = flowing_vars[var]
+                            # elif var in self.external_vars:
+                            #     pass
                             else:
-                                print("SHOULD NOT BE PRINTED - DID NOT FIND FLOW FOR", var)
+                                pass
+                                # print("SHOULD NOT BE PRINTED - DID NOT FIND FLOW FOR", var)
                                 # we expect that `var` comes from some taint source
                                 # this code block indicates that a taint source was not found, so this var's definition was not loaded well into this script
                             self.tainted_vars.add(source_var)
                     elif isinstance(item, nodes.Node):
                         self._track_taint(item, flowing_vars)
+            elif isinstance(value, nodes.Call):
+                print(value)
+                self._track_taint(value, flowing_vars)
             elif isinstance(value, nodes.Node):
                 self._track_taint(value, flowing_vars)
         return self.tainted_vars
@@ -81,13 +83,22 @@ class Taint_Tracker_Jinja:
 
     
     def _extract_names(self, node, tracking_list):
+        if isinstance(node, nodes.Call):
+            for n in node.args:
+                self._extract_names(n, tracking_list)
+            return tracking_list
         if isinstance(node, nodes.Name):
             tracking_list.add(node.name)
+
         for field, value in node.iter_fields():
             if isinstance(value, list):
                 for item in value:
-                    if isinstance(item, nodes.Node):
+                    if isinstance(item, nodes.Call):
+                        self._extract_names(item.args, tracking_list)
+                    elif isinstance(item, nodes.Node):
                         self._extract_names(item, tracking_list)
+            elif isinstance(value, nodes.Call):
+                self._extract_names(value.args, tracking_list)
             elif isinstance(value, nodes.Node):
                 self._extract_names(value, tracking_list)
         return tracking_list
